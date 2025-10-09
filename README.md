@@ -6,9 +6,6 @@
   <a href="https://www.python.org/downloads/release/python-3110/">
     <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue.svg">
   </a>
-  <a href="https://github.com/interviewstreet/hiring-agent/blob/master/LICENSE">
-    <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-yellow.svg">
-  </a>
   <a href="https://github.com/psf/black">
     <img alt="Code style: Black" src="https://img.shields.io/badge/code%20style-Black-000000.svg">
   </a>
@@ -27,9 +24,6 @@
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
 - [Directory layout](#directory-layout)
-- [Contributing](#contributing)
-- [License](#license)
-
 ---
 
 ## Overview
@@ -92,9 +86,6 @@ Hiring Agent parses a resume PDF to Markdown, extracts sectioned JSON using a lo
 ### Quick setup with pip
 
 ```bash
-git clone https://github.com/interviewstreet/hiring-agent
-cd hiring-agent
-
 python -m venv .venv
 # Linux or macOS
 source .venv/bin/activate
@@ -262,16 +253,4 @@ What happens:
 
 ---
 
-## Contributing
 
-- Keep prompts declarative and provider-agnostic.
-- Validate changes with a couple of real resumes under different providers.
-- Add or adjust unit-free smoke tests that call each stage with minimal inputs.
-
-## Contributing
-
-Please read the [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines on filing issues, proposing changes, and submitting pull requests.
-
-## License
-
-[MIT](https://github.com/interviewstreet/hiring-agent/blob/master/LICENSE) © HackerRank
