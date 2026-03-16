@@ -1,0 +1,15 @@
+{
+    "include": [
+        "."
+    ],
+    "exclude": [
+        "**/__pycache__"
+    ],
+    "executionEnvironments": [
+        {
+            "root": "."
+        }
+    ],
+    "reportMissingImports": "none",
+    "reportMissingTypeStubs": false
+}

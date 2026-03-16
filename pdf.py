@@ -3,8 +3,10 @@ import sys
 import json
 import time
 import logging
-import pymupdf
-
+import pymupdf  # type: ignore
+import re
+import pytesseract  # type: ignore
+from pdf2image import convert_from_path  # type: ignore
 from models import (
     JSONResume,
     Basics,
@@ -19,18 +21,18 @@ from models import (
     SkillsSection,
     ProjectsSection,
     AwardsSection,
-)
-from llm_utils import initialize_llm_provider, extract_json_from_response
-from pymupdf_rag import to_markdown
+)  # type: ignore
+from llm_utils import initialize_llm_provider, extract_json_from_response  # type: ignore
+from pymupdf_rag import to_markdown  # type: ignore
 from typing import List, Optional, Dict, Any
 from prompt import (
     DEFAULT_MODEL,
     MODEL_PARAMETERS,
     MODEL_PROVIDER_MAPPING,
     GEMINI_API_KEY,
-)
-from prompts.template_manager import TemplateManager
-from transform import transform_parsed_data
+)  # type: ignore
+from prompts.template_manager import TemplateManager  # type: ignore
+from transform import transform_parsed_data  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ class PDFHandler:
 
     def __init__(self):
         self.template_manager = TemplateManager()
+        self.provider: Any = None
         self._initialize_llm_provider()
 
     def _initialize_llm_provider(self):
@@ -56,6 +59,12 @@ class PDFHandler:
                 doc,
                 pages=pages,
             )
+            
+            # OCR Fallback: If text is very short/empty, it's likely an image-based PDF
+            if not resume_text or len(resume_text.strip()) < 50:
+                logger.info(f"⚠️ Low text density ({len(resume_text) if resume_text else 0} chars). triggering OCR fallback...")
+                resume_text = self._extract_text_with_ocr(pdf_path)
+
             logger.debug(
                 f"Extracted text from PDF: {len(resume_text) if resume_text else 0} characters"
             )
@@ -63,6 +72,19 @@ class PDFHandler:
         except Exception as e:
             logger.error(f"An error occurred while reading the PDF: {e}")
             return None
+
+    def _extract_text_with_ocr(self, pdf_path: str) -> str:
+        """Helper to extract text using OCR for image-based PDFs."""
+        try:
+            images = convert_from_path(pdf_path)
+            full_text = ""
+            for i, image in enumerate(images):
+                page_text = pytesseract.image_to_string(image)
+                full_text += f"\n--- Page {i+1} ---\n{page_text}"
+            return full_text
+        except Exception as e:
+            logger.error(f"OCR Extraction failed: {str(e)}")
+            return ""
 
     def _call_llm_for_section(
         self, section_name: str, text_content: str, prompt: str, return_model=None
@@ -142,13 +164,77 @@ class PDFHandler:
             logger.error("❌ Failed to render basics template")
             return None
         return self._call_llm_for_section("basics", resume_text, prompt, BasicsSection)
+    def extract_experience_section(self, text:str)->Optional[str]:
+        # Normalize spaces and cases
+        clean_text = re.sub(r'\s+', ' ', text).strip().lower()
 
+        # Define multiple heading patterns
+        experience_patterns = [
+            r"(?:work\s+experience)",
+            r"(?:professional\s+experience)",
+            r"(?:experience)",
+            r"(?:employment\s+history)",
+            r"(?:career\s+history)"
+        ]
+
+        # Combine into one regex
+        pattern = "|".join(experience_patterns)
+
+        # Match heading and capture until next section (e.g., PROJECTS, EDUCATION, SKILLS, etc.)
+        match = re.search(rf"({pattern})(.*?)(?=(education|project|skill|achievement|position|responsibility|$))",
+                        clean_text, re.DOTALL)
+
+        if match:
+            return match.group(2).strip()
+        else:
+            print("⚠️ Experience section not found — fallback to LLM context detection")
+            return ""
     def extract_work_section(self, resume_text: str) -> Optional[Dict]:
-        prompt = self.template_manager.render_template("work", text_content=resume_text)
-        if not prompt:
-            logger.error("❌ Failed to render work template")
+        """
+        Extracts only the work/experience section from the given resume text using the
+        LLM and the predefined 'work' template.
+
+        Steps:
+        1. Extract the experience section (by context headers like 'Experience', 'Work Experience', etc.)
+        2. Render the extraction template with that text.
+        3. Call the model to parse and return structured work data.
+        """
+
+        try:
+            # Step 1: Extract only the experience section text
+            experience_text = self.extract_experience_section(resume_text)
+            print("Experience section::", experience_text)
+            if not experience_text:
+                logger.warning("⚠️ No experience section detected in resume text.")
+                return None
+
+            # Step 2: Render your 'work' template with the extracted experience text
+            prompt = self.template_manager.render_template(
+                "work",
+                text_content=experience_text
+            )
+            if not prompt:
+                logger.error("❌ Failed to render work extraction template.")
+                return None
+
+            # Step 3: Call the model to extract the structured experience JSON
+            response = self._call_llm_for_section(
+                "work",
+                experience_text,
+                prompt,
+                WorkSection
+            )
+
+            if not response:
+                logger.error("❌ No response from LLM for work section extraction.")
+                return None
+
+            logger.info("✅ Successfully extracted work section.")
+            return response
+
+        except Exception as e:
+            logger.exception(f"🔥 Error extracting work section: {e}")
             return None
-        return self._call_llm_for_section("work", resume_text, prompt, WorkSection)
 
     def extract_education_section(self, resume_text: str) -> Optional[Dict]:
         prompt = self.template_manager.render_template(
@@ -234,7 +320,7 @@ class PDFHandler:
             logger.error(f"Valid sections: {list(section_extractors.keys())}")
             return None
 
-        return section_extractors[section_name](text_content)
+        return section_extractors[section_name](text_content) # type: ignore
 
     def _extract_single_section(
         self, text_content: str, section_name: str, return_model=None

@@ -1,19 +1,20 @@
 import os
 import re
 import json
-import requests
+import requests # type: ignore
 from pathlib import Path
 
-from typing import Dict, List, Optional, Any
-from models import GitHubProfile
-from pdf import logger
-from prompts.template_manager import TemplateManager
-from prompt import DEFAULT_MODEL, MODEL_PARAMETERS
-from llm_utils import initialize_llm_provider, extract_json_from_response
-from config import DEVELOPMENT_MODE
+from typing import Dict, List, Optional, Any, Tuple, cast
+from models import GitHubProfile # type: ignore
+from pdf import logger # type: ignore
+from datetime import datetime
+from prompts.template_manager import TemplateManager # type: ignore
+from prompt import DEFAULT_MODEL, MODEL_PARAMETERS # type: ignore
+from llm_utils import initialize_llm_provider, extract_json_from_response # type: ignore
+from config import DEVELOPMENT_MODE # type: ignore
 
 
-def _create_cache_filename(api_url: str, params: dict = None) -> str:
+def _create_cache_filename(api_url: str, params: Optional[Dict] = None) -> str:
     url_parts = api_url.replace("https://api.github.com/", "").replace("/", "_")
 
     if params:
@@ -24,7 +25,7 @@ def _create_cache_filename(api_url: str, params: dict = None) -> str:
     return filename
 
 
-def _fetch_github_api(api_url, params=None):
+def _fetch_github_api(api_url: str, params: Optional[Dict] = None) -> Tuple[int, Any]:
     headers = {}
     github_token = os.environ.get("GITHUB_TOKEN")
     if github_token:
@@ -142,22 +143,20 @@ def fetch_contributions_count(owner: str, contributors_data):
     return user_contributions, total_contributions
 
 
-def fetch_repo_contributors(owner: str, repo_name: str) -> int:
+def fetch_repo_contributors(owner: str, repo_name: str) -> List[Dict[str, Any]]:
     try:
         api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contributors"
 
         status_code, contributors_data = _fetch_github_api(api_url)
 
-        return contributors_data
-
         if status_code == 200:
-            return len(contributors_data)
+            return contributors_data
         else:
-            return 1
+            return []
 
     except Exception as e:
         logger.error(f"Error fetching contributors for {owner}/{repo_name}: {e}")
-        return 1
+        return []
 
 
 def fetch_all_github_repos(github_url: str, max_repos: int = 100) -> List[Dict]:
@@ -173,13 +172,17 @@ def fetch_all_github_repos(github_url: str, max_repos: int = 100) -> List[Dict]:
 
         status_code, repos_data = _fetch_github_api(api_url, params=params)
 
-        if status_code == 200:
+        if status_code == 200 and isinstance(repos_data, list):
             projects = []
             for repo in repos_data:
+                if not isinstance(repo, dict):
+                    continue
                 if repo.get("fork") and repo.get("forks_count", 0) < 5:
                     continue
 
                 repo_name = repo.get("name")
+                if not repo_name:
+                    continue
 
                 contributors_data = fetch_repo_contributors(username, repo_name)
                 contributor_count = len(contributors_data)
@@ -191,6 +194,19 @@ def fetch_all_github_repos(github_url: str, max_repos: int = 100) -> List[Dict]:
                 project_type = (
                     "open_source" if contributor_count > 1 else "self_project"
                 )
+
+                # Calculate Activity Recency
+                updated_at_str = repo.get("updated_at")
+                days_since_update = 999
+                if updated_at_str:
+                    updated_at = datetime.strptime(updated_at_str, "%Y-%m-%dT%H:%M:%SZ")
+                    days_since_update = (datetime.utcnow() - updated_at).days
+
+                # Code Quality Pulse (Composite score)
+                stars = repo.get("stargazers_count", 0)
+                forks = repo.get("forks_count", 0)
+                issues = repo.get("open_issues_count", 0)
+                quality_pulse = (stars * 2) + forks - (issues * 0.5)
 
                 project = {
                     "name": repo.get("name"),
@@ -204,15 +220,17 @@ def fetch_all_github_repos(github_url: str, max_repos: int = 100) -> List[Dict]:
                     "contributor_count": contributor_count,
                     "author_commit_count": user_contributions,
                     "total_commit_count": total_contributions,
+                    "activity_recency": f"{days_since_update} days ago",
+                    "quality_pulse": max(0, quality_pulse),
                     "github_details": {
-                        "stars": repo.get("stargazers_count", 0),
-                        "forks": repo.get("forks_count", 0),
+                        "stars": stars,
+                        "forks": forks,
                         "language": repo.get("language"),
                         "description": repo.get("description"),
                         "created_at": repo.get("created_at"),
-                        "updated_at": repo.get("updated_at"),
+                        "updated_at": updated_at_str,
                         "topics": repo.get("topics", []),
-                        "open_issues": repo.get("open_issues_count", 0),
+                        "open_issues": issues,
                         "size": repo.get("size", 0),
                         "fork": repo.get("fork", False),
                         "archived": repo.get("archived", False),
@@ -237,11 +255,11 @@ def fetch_all_github_repos(github_url: str, max_repos: int = 100) -> List[Dict]:
             )
             return projects
 
-        elif response.status_code == 404:
+        elif status_code == 404:
             print(f"GitHub user not found: {username}")
             return []
         else:
-            print(f"GitHub API error: {response.status_code} - {response.text}")
+            print(f"GitHub API error: {status_code}")
             return []
 
     except requests.exceptions.RequestException as e:
@@ -379,14 +397,14 @@ def generate_projects_json(projects: List[Dict]) -> List[Dict]:
             print(f"ERROR: Raw response: {response_text}")
 
             print("🔄 Falling back to first 7 projects")
-            return projects_data[:7]
+            return cast(List[Any], projects_data)[:7] # type: ignore
 
     except Exception as e:
         print(f"Error using LLM for project selection: {e}")
         print("🔄 Falling back to first 7 projects")
 
         projects_data = []
-        for project in projects[:7]:
+        for project in cast(List[Any], projects)[:7]: # type: ignore
             project_data = {
                 "name": project.get("name"),
                 "description": project.get("description"),

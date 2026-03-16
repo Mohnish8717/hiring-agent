@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Tuple, Any, Protocol, runtime_checkable
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator # type: ignore
 from enum import Enum
 
 
@@ -247,6 +247,8 @@ class EvaluationData(BaseModel):
     deductions: Deductions
     key_strengths: List[str] = Field(min_items=1, max_items=5)
     areas_for_improvement: List[str] = Field(min_items=1, max_items=5)
+    jd_fit_analysis: Optional[str] = Field(None, description="Detailed analysis of how the candidate fits or mismatches the JD")
+    mismatch_reasons: List[str] = Field(default_factory=list, description="Specific reasons why the candidate did not match the JD requirements")
 
 
 class GitHubProfile(BaseModel):

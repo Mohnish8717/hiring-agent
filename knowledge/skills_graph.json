@@ -1,0 +1,30 @@
+{
+  "categories": {
+    "Frontend": ["React", "Vue", "Angular", "Svelte", "HTML", "CSS", "Tailwind", "Next.js", "TypeScript"],
+    "Backend": ["Python", "Node.js", "Go", "Rust", "Java", "Django", "FastAPI", "Express", "Ruby on Rails", "C++", "C#"],
+    "Database": ["PostgreSQL", "MongoDB", "Redis", "MySQL", "Cassandra", "Elasticsearch", "Neo4j", "SQL"],
+    "Mobile": ["React Native", "Flutter", "Swift", "Kotlin", "Android", "iOS", "Expo"],
+    "Data Science": ["NumPy", "Pandas", "Scikit-learn", "PyTorch", "TensorFlow", "Keras", "Matplotlib", "Jupyter", "Machine Learning", "Deep Learning", "NLP"],
+    "DevOps": ["Docker", "Kubernetes", "AWS", "GCP", "Azure", "CI/CD", "Terraform", "Ansible", "Jenkins", "Nginx", "Linux"],
+    "Tools": ["Git", "GitHub", "Jira", "Slack", "Postman", "MS-Excel"]
+  },
+  "relationships": {
+    "React": {"related": ["React Native", "Next.js", "Svelte", "Vue"], "parents": ["Frontend"]},
+    "Python": {"related": ["Django", "FastAPI", "NumPy", "Pandas"], "parents": ["Backend", "Data Science"]},
+    "Django": {"parents": ["Backend", "Python"]},
+    "FastAPI": {"parents": ["Backend", "Python"]},
+    "NumPy": {"parents": ["Data Science", "Python"]},
+    "Pandas": {"parents": ["Data Science", "Python"]},
+    "PyTorch": {"related": ["TensorFlow", "Deep Learning"], "parents": ["Data Science"]},
+    "TensorFlow": {"related": ["PyTorch", "Deep Learning"], "parents": ["Data Science"]},
+    "MongoDB": {"related": ["Express", "React", "Node.js"], "parents": ["Database", "Backend"]},
+    "Docker": {"related": ["Kubernetes"], "parents": ["DevOps"]}
+  },
+  "aliases": {
+    "JS": "JavaScript",
+    "TS": "TypeScript",
+    "ML": "Machine Learning",
+    "DL": "Deep Learning",
+    "DS": "Data Science"
+  }
+}

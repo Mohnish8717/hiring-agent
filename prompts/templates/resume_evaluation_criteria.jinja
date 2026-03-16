@@ -1,4 +1,8 @@
-You are evaluating a resume for a Software Intern position at HackerRank. Analyze the resume data and provide scores based on these criteria:
+{% if job_description %}
+You are evaluating a resume against a specific **Job Description (JD)** for a position. Analyze the resume data focusing on how well it matches the JD requirements and provide scores based on these criteria.
+{% else %}
+You are evaluating a resume for a Software Intern position at HackerRank. Analyze the resume data and provide scores based on these criteria.
+{% endif %}
 
 **MANDATORY: You MUST always fill ALL FOUR categories: open_source, self_projects, production, technical_skills.**
 
@@ -165,6 +169,16 @@ You are evaluating a resume for a Software Intern position at HackerRank. Analyz
 
 **DO NOT RETURN A RESUME SUMMARY. RETURN ONLY THE SCORING EVALUATION IN THE SPECIFIED JSON FORMAT.**
 
+{% if job_description %}
+## JOB DESCRIPTION (JD) TO MATCH AGAINST:
+{{ job_description }}
+
+## JD MATCHING INSTRUCTIONS:
+- Analyze precisely where the resume falls short of the JD requirements (Gap Analysis).
+- Be explicit about missing specific skills, years of experience, or domain knowledge requested in the JD.
+- If the resume is for a different role entirely, explain the fundamental mismatch.
+{% endif %}
+
 Analyze the following resume and provide a JSON response with this EXACT structure (all fields are required):
 
 {
@@ -177,7 +191,9 @@ Analyze the following resume and provide a JSON response with this EXACT structu
     "bonus_points": {"total": 0, "breakdown": "string"},
     "deductions": {"total": 0, "reasons": "string"},
     "key_strengths": ["strength1", "strength2", "strength3", "strength4", "strength5"],
-    "areas_for_improvement": ["improvement1", "improvement2", "improvement3"]
+    "areas_for_improvement": ["improvement1", "improvement2", "improvement3"],
+    "jd_fit_analysis": "string - detailed explanation of JD fit vs mismatch",
+    "mismatch_reasons": ["reason1", "reason2"]
 }
 
 Resume to evaluate:
