@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
 from sse_starlette.sse import EventSourceResponse
-from pythonjsonlogger import json
+from pythonjsonlogger import json as jsonlogger
 
 from utils.redis_client import (
     async_redis_client,
@@ -25,7 +25,7 @@ from db.database import init_db
 
 # Setup structured JSON logging with PII redaction
 log_handler = logging.StreamHandler()
-log_handler.setFormatter(json.JsonFormatter(
+log_handler.setFormatter(jsonlogger.JsonFormatter(
     "%(asctime)s %(name)s %(levelname)s %(message)s",
     rename_fields={"asctime": "timestamp", "levelname": "level"},
 ))
