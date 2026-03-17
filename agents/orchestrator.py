@@ -16,7 +16,7 @@ import sys
 import os
 import json
 import uuid
-from typing import Dict, Any, Optional, TypedDict, Annotated
+from typing import Dict, Any, Optional, TypedDict, Annotated, List
 from langgraph.graph import StateGraph, END  # type: ignore
 
 from agents.extraction_agent import ExtractionAgent  # type: ignore
@@ -33,6 +33,7 @@ from db.database import async_session_factory
 from db.pg_models import Candidate, AuditLog
 from utils.storage import upload_file, generate_presigned_url
 from models import JSONResume, EvaluationData  # type: ignore
+from transform import convert_json_resume_to_text  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -74,12 +75,6 @@ class ATSOrchestrator:
         self.logger = logging.getLogger("orchestrator")
         self.graph_engine = SkillsGraphEngine()
         
-        try:
-            self.vector_store = CandidateVectorStore()
-        except Exception as e:
-            self.logger.warning(f"Vector store (Qdrant) initialization failed: {e}. Vector search features will be disabled.")
-            self.vector_store = None
-
         # Initialize agents once
         self.extraction_agent = ExtractionAgent()
         self.verification_agent = VerificationAgent()
@@ -89,9 +84,23 @@ class ATSOrchestrator:
         self.hiring_analytics_agent = HiringAnalyticsAgent()
         self.quality_agent = ApplicationQualityAgent()
         self.experience_agent = CandidateExperienceAgent()
+        
+        # Private members for lazy properties
+        self._vector_store: Optional[CandidateVectorStore] = None
 
         # Build the DAG
         self._graph = self._build_graph()
+
+    @property
+    def vector_store(self) -> CandidateVectorStore:
+        """Lazy initialization of vector store to ensure fork-safety in Celery workers."""
+        if not hasattr(self, "_vector_store") or self._vector_store is None:
+            try:
+                self._vector_store = CandidateVectorStore()
+            except Exception as e:
+                self.logger.warning(f"Vector store (Qdrant) initialization failed: {e}")
+                self._vector_store = None
+        return self._vector_store
 
     # ------------------------------------------------------------------
     # Helper: unified logger
@@ -99,11 +108,11 @@ class ATSOrchestrator:
     async def _log(self, state: PipelineState, msg: str):
         self.logger.info(msg)
         on_log = state.get("on_log")
-        if on_log:
-            if asyncio.iscoroutinefunction(on_log):
-                await on_log(msg)
-            else:
+        if on_log and callable(on_log):
+            try:
                 on_log(msg)
+            except Exception as e:
+                self.logger.error(f"Failed to call on_log callback: {e}")
 
     async def _add_audit_log(self, state: PipelineState, action: str, details: Optional[Dict] = None):
         """Helper to persist audit logs to PostgreSQL with fail-safe."""
@@ -114,6 +123,8 @@ class ATSOrchestrator:
                 audit = AuditLog(
                     tenant_id=state.get("tenant_id", uuid.UUID("00000000-0000-0000-0000-000000000000")),
                     request_id=state.get("request_id", "system"),
+                    candidate_id=state.get("candidate_id"),
+                    agent_name=details.get("agent_name", "orchestrator") if details else "orchestrator",
                     action=action,
                     details=details or {}
                 )
@@ -156,19 +167,16 @@ class ATSOrchestrator:
         resume_data = state.get("resume_data")
         if not resume_data:
             return {"app_quality": None}
-        quality_input = resume_data.model_dump(include={
-            "basics": {"summary"}, "work": True, "projects": True
+
+        app_quality = await self.quality_agent.process({
+            "resume_text": convert_json_resume_to_text(resume_data)
         })
-        app_quality = await self.quality_agent.process({"resume_text": json.dumps(quality_input)})
-        
-        await self._add_audit_log(state, "QUALITY_CHECK", {
+        await self._add_audit_log(state, "QUALITY_SCAN", {
             "ai_prob": app_quality.ai_generated_probability if app_quality else 0
         })
-
         return {"app_quality": app_quality}
 
     async def _node_verification(self, state: PipelineState) -> dict:
-        await self._log(state, "--- Phase 2: Verification ---")
         github_url = state.get("github_url")
         if not github_url:
             await self._log(state, "No GitHub URL found, skipping verification")
@@ -185,10 +193,13 @@ class ATSOrchestrator:
         return {"github_data": github_data}
 
     async def _node_identity_trust(self, state: PipelineState) -> dict:
-        await self._log(state, "--- Phase 2.1: Identity Trust ---")
+        await self._log(state, "--- Phase 2: Identity & Trust ---")
         resume_data = state.get("resume_data")
         github_data = state.get("github_data")
         app_quality = state.get("app_quality")
+        if not resume_data:
+            return {"identity_trust": None}
+
         identity_trust = await self.identity_trust_agent.process({
             "resume_data": resume_data,
             "github_data": github_data,
@@ -202,16 +213,15 @@ class ATSOrchestrator:
         return {"identity_trust": identity_trust}
 
     async def _node_skill_assessment(self, state: PipelineState) -> dict:
-        await self._log(state, "--- Phase 2.2: Skill Assessment ---")
+        await self._log(state, "--- Phase 2.6: Skill Assessment ---")
         resume_data = state.get("resume_data")
+        job_description = state.get("job_description")
         if not resume_data:
             return {"skill_assessment": None}
-        assessment_resume = JSONResume(**resume_data.model_dump(include={
-            "basics": {"name"}, "skills": True, "work": True, "projects": True
-        }))
+        
         skill_assessment = await self.skill_assessment_agent.process({
-            "resume_data": assessment_resume,
-            "jd_text": state.get("job_description"),
+            "resume_data": resume_data,
+            "jd_text": job_description
         })
         
         await self._add_audit_log(state, "SKILL_ASSESSMENT", {
@@ -223,10 +233,14 @@ class ATSOrchestrator:
     async def _node_bias_audit(self, state: PipelineState) -> dict:
         await self._log(state, "--- Phase 3: Bias Audit & Evaluation ---")
         resume_data = state.get("resume_data")
+        job_description = state.get("job_description")
+        if not resume_data:
+            return {"blind_evaluation": None}
+
         evaluation_input = {
             "resume_data": resume_data,
             "github_data": state.get("github_data"),
-            "job_description": state.get("job_description"),
+            "job_description": job_description,
         }
         blind_evaluation = await self.bias_audit_agent.process(evaluation_input)
 
@@ -251,12 +265,9 @@ class ATSOrchestrator:
         resume_data = state.get("resume_data")
         if not blind_evaluation or not resume_data:
             return {"hiring_analytics": None}
-        analytics_resume = JSONResume(**resume_data.model_dump(include={
-            "work": True, "projects": True, "education": True
-        }))
         hiring_analytics = await self.hiring_analytics_agent.process({
-            "resume_data": analytics_resume,
-            "blind_evaluation": blind_evaluation,
+            "resume_data": resume_data,
+            "blind_evaluation": blind_evaluation
         })
         if blind_evaluation:
             blind_evaluation.hiring_analytics = hiring_analytics
@@ -269,15 +280,14 @@ class ATSOrchestrator:
 
     async def _node_candidate_experience(self, state: PipelineState) -> dict:
         await self._log(state, "--- Phase 3.6: Candidate Experience ---")
-        blind_evaluation = state.get("blind_evaluation")
+        # Optimization: CandidateExperience needs the full evaluation for personalized feedback
         resume_data = state.get("resume_data")
-        if not blind_evaluation or not resume_data:
+        blind_evaluation = state.get("blind_evaluation")
+        if not resume_data:
             return {"candidate_experience": None}
-        experience_resume = JSONResume(**resume_data.model_dump(include={
-            "basics": {"name"}, "work": True, "skills": True
-        }))
+
         candidate_experience = await self.experience_agent.process({
-            "resume_data": experience_resume,
+            "resume_data": resume_data,
             "blind_evaluation": blind_evaluation,
         })
         
@@ -290,7 +300,7 @@ class ATSOrchestrator:
     async def _node_persist_and_report(self, state: PipelineState) -> dict:
         await self._log(state, "--- Phase 4: Intelligence Storage & Report ---")
         resume_data = state.get("resume_data")
-        blind_evaluation = state.get("blind_evaluation")
+        blind_evaluation: Optional[EvaluationData] = state.get("blind_evaluation")
         identity_trust = state.get("identity_trust")
         app_quality = state.get("app_quality")
         skill_assessment = state.get("skill_assessment")
@@ -346,13 +356,7 @@ class ATSOrchestrator:
                 },
             }
         except Exception as e:
-            self.logger.error(f"Error building contribution map: {e}")
-
-        # Persist to vector store
-        if blind_evaluation and resume_data:
-            self._persist_candidate(
-                state["pdf_path"], resume_data, blind_evaluation, contribution_map
-            )
+            self.logger.warning(f"Contribution map generation partially failed: {e}")
 
         # Serialize everything
         results: Dict[str, Any] = {
@@ -381,6 +385,7 @@ class ATSOrchestrator:
 
         # Report generation
         report_url = None
+        report_object_key = None
         if blind_evaluation:
             try:
                 report_dir = "cache/reports"
@@ -416,7 +421,17 @@ class ATSOrchestrator:
                 self.logger.error(f"Failed to generate report: {e}")
                 await self._log(state, f"Error generating report: {str(e)}")
 
-        # Persist to PostgreSQL (Fail-safe)
+        # --- Phase 4.1: Normalization & Persistence ---
+        
+        # 1. Normalize score BEFORE persistence
+        if blind_evaluation:
+            # blind_evaluation is an EvaluationData object
+            raw_score = getattr(blind_evaluation, "total_score", 0)
+            normalized_score = min(100, max(0, round((raw_score / 60) * 100)))
+            serializable_results["blind_evaluation"]["total_score"] = normalized_score
+            await self._log(state, f"Normalized score: {normalized_score}/100")
+
+        # 2. Persist to PostgreSQL (Fail-safe)
         try:
             async with async_session_factory() as session:
                 candidate = Candidate(
@@ -434,30 +449,50 @@ class ATSOrchestrator:
         except Exception as e:
             self.logger.warning(f"Persistence skipped (DB unreachable): {e}")
 
-        # Vector Store Persistence (Fail-safe)
+        # 3. Vector Store Persistence (Fail-safe)
         try:
-            if blind_evaluation and resume_data:
-                vector_store = CandidateVectorStore()
-                await vector_store.add_candidate(
+            if blind_evaluation and resume_data and self.vector_store:
+                # Use getattr safely for Pydantic models
+                skills = getattr(resume_data, "skills", [])
+                skills_list: List[str] = []
+                if isinstance(skills, list):
+                    for s in skills:
+                        name = getattr(s, "name", str(s))
+                        if name:
+                            skills_list.append(name)
+                
+                skills_str = ", ".join(skills_list) if skills_list else 'N/A'
+                
+                strengths = getattr(blind_evaluation, "key_strengths", [])
+                # Fix lint by casting or checking type
+                if isinstance(strengths, list) and len(strengths) > 0:
+                    top_strengths = strengths[:3]
+                    strengths_str = ", ".join([str(s) for s in top_strengths])
+                else:
+                    strengths_str = 'N/A'
+                
+                profile_summary = f"Skills: {skills_str}. Strengths: {strengths_str}"
+                
+                metadata = {
+                    "score": float(serializable_results["blind_evaluation"]["total_score"]),
+                    "tenant_id": str(state.get("tenant_id")),
+                    "request_id": state.get("request_id")
+                }
+                
+                self.vector_store.add_candidate(
                     candidate_id=state.get("request_id", str(uuid.uuid4())),
-                    resume_data=resume_data.model_dump(),
-                    score=float(serializable_results["blind_evaluation"]["total_score"]),
-                    tenant_id=state.get("tenant_id")
+                    profile_text=profile_summary,
+                    metadata=metadata
                 )
                 await self._log(state, "Added candidate to vector store.")
         except Exception as e:
             self.logger.warning(f"Vector search persistence skipped (Qdrant unreachable): {e}")
 
-        # Normalize score
-        if blind_evaluation:
-            raw_score = blind_evaluation.total_score
-            normalized_score = min(100, max(0, round((raw_score / 60) * 100)))
-            serializable_results["blind_evaluation"]["total_score"] = normalized_score
-
         await self._log(state, "Pipeline run complete")
         return {
-            "serializable_results": serializable_results, 
-            "report_url": report_url,
+            "serializable_results": serializable_results,
+            "report_url": serializable_results.get("report_url"),
+            "resume_object_key": state.get("resume_object_key"),
             "report_object_key": report_object_key
         }
 
@@ -549,12 +584,19 @@ class ATSOrchestrator:
         tenant_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Runs the complete multi-agent pipeline for a single resume."""
+        # Robust UUID conversion for multi-tenant isolation
+        try:
+            val_tenant = uuid.UUID(tenant_id) if tenant_id else uuid.UUID("00000000-0000-0000-0000-000000000000")
+        except (ValueError, TypeError):
+            # Fallback to system tenant if tenant_id is 'default' or invalid hex
+            val_tenant = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
         initial_state: PipelineState = {
             "pdf_path": pdf_path,
             "job_description": job_description,
             "on_log": on_log,
             "request_id": request_id or str(uuid.uuid4()),
-            "tenant_id": uuid.UUID(tenant_id) if tenant_id else uuid.UUID("00000000-0000-0000-0000-000000000000"),
+            "tenant_id": val_tenant,
             "start_time": asyncio.get_event_loop().time()
         }
 

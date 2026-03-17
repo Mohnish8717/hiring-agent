@@ -80,11 +80,13 @@ class PIIRedactionMiddleware(BaseHTTPMiddleware):
         except (json.JSONDecodeError, UnicodeDecodeError):
             new_body = body_bytes
 
+        # Return a fresh response object. Starlette will calculate the correct 
+        # Content-Length for new_body. Headers from outer middlewares (like CORS) 
+        # will be added by their respective dispatch methods.
         return Response(
             content=new_body,
             status_code=response.status_code,
-            headers=dict(response.headers),
-            media_type=response.media_type,
+            media_type="application/json",
         )
 
 

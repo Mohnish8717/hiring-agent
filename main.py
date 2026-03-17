@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
 from sse_starlette.sse import EventSourceResponse
-from pythonjsonlogger import json_log
+from pythonjsonlogger import json
 
 from utils.redis_client import (
     async_redis_client,
@@ -18,13 +18,14 @@ from utils.redis_client import (
     subscribe_logs,
 )
 from celery_worker import process_resume_task
+
 from middleware.pii_redactor import PIIRedactionMiddleware, PIIRedactionLogFilter
 from middleware.auth import KeycloakAuthMiddleware
 from db.database import init_db
 
 # Setup structured JSON logging with PII redaction
 log_handler = logging.StreamHandler()
-log_handler.setFormatter(json_log.JSONFormatter(
+log_handler.setFormatter(json.JsonFormatter(
     "%(asctime)s %(name)s %(levelname)s %(message)s",
     rename_fields={"asctime": "timestamp", "levelname": "level"},
 ))
@@ -35,15 +36,14 @@ logger = logging.getLogger("api-bridge")
 app = FastAPI(title="IKSHA AI Backend Bridge")
 
 # Middleware stack (order matters: last added = first executed)
-app.add_middleware(
-    CORSMiddleware,
+app.add_middleware(KeycloakAuthMiddleware)
+app.add_middleware(PIIRedactionMiddleware)
+app.add_middleware(CORSMiddleware,
     allow_origins=["*"],  # In production, restrict to dashboard URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(PIIRedactionMiddleware)
-app.add_middleware(KeycloakAuthMiddleware)
 
 
 @app.on_event("startup")
