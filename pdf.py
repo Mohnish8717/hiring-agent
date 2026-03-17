@@ -22,7 +22,7 @@ from models import (
     ProjectsSection,
     AwardsSection,
 )  # type: ignore
-from llm_utils import initialize_llm_provider, extract_json_from_response  # type: ignore
+from llm_utils import initialize_llm_provider, extract_json_from_response, get_model_for_task, ReasoningIntensity  # type: ignore
 from pymupdf_rag import to_markdown  # type: ignore
 from typing import List, Optional, Dict, Any
 from prompt import (
@@ -41,12 +41,13 @@ class PDFHandler:
 
     def __init__(self):
         self.template_manager = TemplateManager()
+        self.model_name = get_model_for_task(ReasoningIntensity.HIGH)
         self.provider: Any = None
         self._initialize_llm_provider()
 
     def _initialize_llm_provider(self):
         """Initialize the appropriate LLM provider based on the model."""
-        self.provider = initialize_llm_provider(DEFAULT_MODEL)
+        self.provider = initialize_llm_provider(self.model_name)
 
     def extract_text_from_pdf(self, pdf_path: str) -> Optional[str]:
         try:
@@ -92,11 +93,11 @@ class PDFHandler:
         try:
             start_time = time.time()
             logger.debug(
-                f"🔄 Extracting {section_name} section using {DEFAULT_MODEL}..."
+                f"🔄 Extracting {section_name} section using {self.model_name}..."
             )
 
             model_params = MODEL_PARAMETERS.get(
-                DEFAULT_MODEL, {"temperature": 0.1, "top_p": 0.9}
+                self.model_name, {"temperature": 0.1, "top_p": 0.9}
             )
 
             section_system_message = self.template_manager.render_template(
@@ -109,7 +110,7 @@ class PDFHandler:
                 return None
 
             chat_params = {
-                "model": DEFAULT_MODEL,
+                "model": self.model_name,
                 "messages": [
                     {"role": "system", "content": section_system_message},
                     {"role": "user", "content": prompt},
@@ -136,7 +137,7 @@ class PDFHandler:
                 json_end = response_text.rfind("}")
                 if json_start != -1 and json_end != -1:
                     response_text = response_text[json_start : json_end + 1]
-                parsed_data = json.loads(response_text)
+                parsed_data = json.loads(response_text, strict=False)
                 logger.debug(f"✅ Successfully extracted {section_name} section")
 
                 transformed_data = transform_parsed_data(parsed_data)

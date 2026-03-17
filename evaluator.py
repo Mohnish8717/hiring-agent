@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional, Tuple, Any # type: ignore
 from pydantic import BaseModel, Field, field_validator # type: ignore
 from models import JSONResume, EvaluationData # type: ignore
-from llm_utils import initialize_llm_provider, extract_json_from_response # type: ignore
+from llm_utils import initialize_llm_provider, extract_json_from_response, get_model_for_task, ReasoningIntensity # type: ignore
 import logging # type: ignore
 import json # type: ignore
 import re # type: ignore
@@ -24,11 +24,12 @@ logger = logging.getLogger(__name__)
 class ResumeEvaluator:
     def __init__(
         self,
-        model_name: str = DEFAULT_MODEL,
+        model_name: Optional[str] = None,
+        intensity: ReasoningIntensity = ReasoningIntensity.HIGH,
         model_params: Optional[Dict[str, Any]] = None,
     ):
         if not model_name:
-            raise ValueError("Model name cannot be empty")
+            model_name = get_model_for_task(intensity)
 
         self.model_name = model_name
         self.model_params = model_params or MODEL_PARAMETERS.get(
@@ -102,8 +103,13 @@ class ResumeEvaluator:
         # 1. Run primary model (e.g. Gemini/DEFAULT_MODEL)
         primary_eval = self._evaluate_with_model(full_prompt, self.model_name, self.provider)
         
-        # 2. Run fallback model (e.g. Ollama if primary is Gemini, or vice versa)
-        secondary_model = "gemma3:4b" if "gemini" in self.model_name.lower() else "gemini-2.0-flash"
+        # 2. Run fallback model (Logic depends on provider)
+        from prompt import PROVIDER, ModelProvider
+        if PROVIDER == ModelProvider.GROQ.value:
+            secondary_model = "llama-3.1-8b-instant" if self.model_name == "llama-3.3-70b-versatile" else "llama-3.3-70b-versatile"
+        else:
+            secondary_model = "gemma3:4b" if "gemini" in self.model_name.lower() else "gemini-2.0-flash"
+            
         secondary_provider = initialize_llm_provider(secondary_model)
         
         try:

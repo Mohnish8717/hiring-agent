@@ -222,7 +222,9 @@ def fetch_all_github_repos(github_url: str, max_repos: int = 100) -> List[Dict]:
                     "total_commit_count": total_contributions,
                     "activity_recency": f"{days_since_update} days ago",
                     "quality_pulse": max(0, quality_pulse),
+                    "owner_login": repo.get("owner", {}).get("login"),
                     "github_details": {
+                        "owner_login": repo.get("owner", {}).get("login"),
                         "stars": stars,
                         "forks": forks,
                         "language": repo.get("language"),

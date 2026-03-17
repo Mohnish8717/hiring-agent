@@ -11,9 +11,10 @@ class BiasAuditAgent(Agent):
     """Agent specialized in anonymizing data and performing blind evaluations to minimize bias."""
     
     def __init__(self, graph_engine: Optional[SkillsGraphEngine] = None):
-        super().__init__("BiasAuditAgent")
+        Agent.__init__(self, "BiasAuditAgent")
+        from llm_utils import ReasoningIntensity
         self.redactor = Redactor()
-        self.evaluator = ResumeEvaluator()
+        self.evaluator = ResumeEvaluator(intensity=ReasoningIntensity.HIGH)
         self.graph_engine = graph_engine or SkillsGraphEngine()
 
     async def process(self, data: Dict[str, Any]) -> Optional[EvaluationData]:

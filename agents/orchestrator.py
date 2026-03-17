@@ -2,10 +2,16 @@ import logging
 import asyncio
 import sys
 import os
+import json
 from typing import Dict, Any, Optional
 from agents.extraction_agent import ExtractionAgent # type: ignore
 from agents.verification_agent import VerificationAgent # type: ignore
 from agents.bias_audit_agent import BiasAuditAgent # type: ignore
+from agents.identity_trust_agent import IdentityTrustAgent # type: ignore
+from agents.skill_assessment_agent import SkillAssessmentAgent # type: ignore
+from agents.hiring_analytics_agent import HiringAnalyticsAgent # type: ignore
+from agents.application_quality_agent import ApplicationQualityAgent # type: ignore
+from agents.candidate_experience_agent import CandidateExperienceAgent # type: ignore
 from knowledge.graph_engine import SkillsGraphEngine # type: ignore
 from db.vector_store import CandidateVectorStore # type: ignore
 from models import JSONResume, EvaluationData # type: ignore
@@ -21,6 +27,11 @@ class ATSOrchestrator:
         self.extraction_agent = ExtractionAgent()
         self.verification_agent = VerificationAgent()
         self.bias_audit_agent = BiasAuditAgent(graph_engine=self.graph_engine)
+        self.identity_trust_agent = IdentityTrustAgent()
+        self.skill_assessment_agent = SkillAssessmentAgent()
+        self.hiring_analytics_agent = HiringAnalyticsAgent()
+        self.quality_agent = ApplicationQualityAgent()
+        self.experience_agent = CandidateExperienceAgent()
 
     async def run_pipeline(self, pdf_path: str, job_description: Optional[str] = None) -> Dict[str, Any]:
         """Runs the complete multi-agent pipeline for a single resume."""
@@ -29,7 +40,13 @@ class ATSOrchestrator:
             "job_description": job_description,
             "resume_data": None,
             "github_data": None,
-            "blind_evaluation": None
+            "blind_evaluation": None,
+            "identity_trust": None,
+            "portfolio_intelligence": None,
+            "skill_assessment": None,
+            "hiring_analytics": None,
+            "application_quality": None,
+            "candidate_experience": None
         }
 
         # 1. Extraction Phase
@@ -39,6 +56,17 @@ class ATSOrchestrator:
             self.logger.error("Pipeline failed at extraction phase")
             return results
         results["resume_data"] = resume_data
+
+        # 1.5. Application Quality Detection
+        self.logger.info("--- Phase 1.5: Application Quality ---")
+        # Optimization: Pass only relevant sections for quality detection
+        quality_input = resume_data.model_dump(include={
+            "basics": {"summary"},
+            "work": True,
+            "projects": True
+        })
+        app_quality = await self.quality_agent.process({"resume_text": json.dumps(quality_input)})
+        results["application_quality"] = app_quality
 
         # 2. Verification Phase (GitHub)
         self.logger.info("--- Phase 2: Verification ---")
@@ -50,6 +78,31 @@ class ATSOrchestrator:
         else:
             self.logger.info("No GitHub URL found, skipping verification")
 
+        # 2.1. Identity Trust Agent
+        self.logger.info("--- Phase 2.1: Identity Trust ---")
+        identity_trust = await self.identity_trust_agent.process({
+            "resume_data": resume_data,
+            "github_data": github_data,
+            "ai_probability": app_quality.ai_generated_probability if app_quality else None
+        })
+        results["identity_trust"] = identity_trust
+
+        # --- Phase 2.2: Skill Assessment ---
+        self.logger.info("--- Phase 2.2: Skill Assessment ---")
+        # Optimization: Filter for skills, work, and projects
+        assessment_resume = JSONResume(**resume_data.model_dump(include={
+            "basics": {"name"},
+            "skills": True,
+            "work": True,
+            "projects": True
+        }))
+        skill_assessment = await self.skill_assessment_agent.process({
+            "resume_data": assessment_resume,
+            "jd_text": job_description
+        })
+        results["skill_assessment"] = skill_assessment
+
+
         # 3. Bias Audit & Evaluation Phase
         self.logger.info("--- Phase 3: Bias Audit & Evaluation ---")
         evaluation_input = {
@@ -59,7 +112,43 @@ class ATSOrchestrator:
         }
         blind_evaluation = await self.bias_audit_agent.process(evaluation_input)
         results["blind_evaluation"] = blind_evaluation
+        
+        # Merge next-gen signals into evaluation data for dashbaord
+        if blind_evaluation:
+            blind_evaluation.identity_trust = identity_trust
+            blind_evaluation.portfolio_intelligence = identity_trust.portfolio
+            blind_evaluation.skill_assessment = skill_assessment
+            blind_evaluation.application_quality = app_quality
+            
+            # 3.5. Hiring Analytics
+            self.logger.info("--- Phase 3.5: Hiring Analytics ---")
+            # Optimization: Filter for work, projects, and education
+            analytics_resume = JSONResume(**resume_data.model_dump(include={
+                "work": True,
+                "projects": True,
+                "education": True
+            }))
+            hiring_analytics = await self.hiring_analytics_agent.process({
+                "resume_data": analytics_resume,
+                "blind_evaluation": blind_evaluation
+            })
+            blind_evaluation.hiring_analytics = hiring_analytics
+            results["hiring_analytics"] = hiring_analytics
 
+            # 3.6. Candidate Experience
+            self.logger.info("--- Phase 3.6: Candidate Experience ---")
+            # Optimization: Filter for basics, work, and skills
+            experience_resume = JSONResume(**resume_data.model_dump(include={
+                "basics": {"name"},
+                "work": True,
+                "skills": True
+            }))
+            candidate_experience = await self.experience_agent.process({
+                "resume_data": experience_resume,
+                "blind_evaluation": blind_evaluation
+            })
+            results["candidate_experience"] = candidate_experience
+            
         # 3.1. Generate Contribution Map for XAI
         results["contribution_map"] = {
             "extraction": {
@@ -67,22 +156,50 @@ class ATSOrchestrator:
                 "status": "Success",
                 "output_size": len(str(resume_data))
             },
+            "quality": {
+                "ai_probability": app_quality.ai_generated_probability,
+                "intent_score": app_quality.application_intent_score
+            },
+            "trust": {
+                "score": identity_trust.identity_score,
+                "flags": identity_trust.fraud_flags,
+                "linkedin": identity_trust.linkedin.linkedin_profile_score if identity_trust.linkedin else 0,
+                "github_auth": identity_trust.github.repo_authenticity_score if identity_trust.github else 0,
+                "email": identity_trust.email.email_legitimacy_score if identity_trust.email else 0,
+                "social_graph": identity_trust.social_graph_trust_score,
+                "ai_resume": identity_trust.ai_resume_probability
+            },
+            "portfolio": {
+                 "depth": identity_trust.portfolio.portfolio_score if identity_trust.portfolio else 0.0,
+                 "complexity": identity_trust.portfolio.project_complexity if identity_trust.portfolio else "N/A"
+            },
+            "skills": {
+                "match": skill_assessment.skill_match_score,
+                "suggested_tasks": skill_assessment.suggested_tasks
+            },
             "verification": {
                 "agent": "VerificationAgent",
                 "signals": ["GitHub"] if github_data else [],
-                "repos_found": len(github_data.repositories) if (github_data and hasattr(github_data, 'repositories')) else 0
+                "repos_found": len(github_data.get('projects', [])) if github_data else 0
             },
             "evaluation": {
                 "agent": "BiasAuditAgent",
                 "anonymized": True,
                 "semantic_clusters": self.bias_audit_agent._enrich_skills_context(resume_data)
+            },
+            "analytics": {
+                "success_prob": results["hiring_analytics"].success_probability if results.get("hiring_analytics") else 0
+            },
+            "experience": {
+                "feedback": results["candidate_experience"].get("feedback", "") if results.get("candidate_experience") else ""
             }
         }
+
 
         # 4. Memory Persistence (Vector Store)
         self.logger.info("--- Phase 4: Intelligence Storage ---")
         if blind_evaluation:
-            self._persist_candidate(pdf_path, resume_data, blind_evaluation)
+            self._persist_candidate(pdf_path, resume_data, blind_evaluation, results.get("contribution_map"))
 
         self.logger.info("Pipeline run complete")
         return results
@@ -95,15 +212,26 @@ class ATSOrchestrator:
                 return profile.url
         return None
 
-    def _persist_candidate(self, path: str, resume: JSONResume, evaluation: EvaluationData):
+    def _persist_candidate(self, path: str, resume: JSONResume, evaluation: EvaluationData, contribution_map: Optional[Dict] = None):
         """Stores the candidate profile and score in the vector database."""
         try:
             candidate_id = resume.basics.email if (resume.basics and resume.basics.email) else path
+            # Use centralized total_score calculation
+            total_score = evaluation.total_score
+            
             # Prepare metadata (redacted)
             metadata = {
-                "score": float(evaluation.score) if hasattr(evaluation, 'score') else 0.0,
+                "score": float(total_score),
                 "strengths": ", ".join(evaluation.key_strengths[:3]) if evaluation.key_strengths else "",
-                "path": path
+                "path": path,
+                "trust_score": float(evaluation.identity_trust.identity_score) if evaluation.identity_trust else 0.0,
+                "portfolio_depth": float(evaluation.portfolio_intelligence.portfolio_score) if evaluation.portfolio_intelligence else 0.0,
+
+
+                "skill_match": float(evaluation.skill_assessment.skill_match_score) if evaluation.skill_assessment else 0.0,
+                "success_prob": float(evaluation.hiring_analytics.success_probability) if evaluation.hiring_analytics else 0.0,
+                "ai_prob": float(evaluation.application_quality.ai_generated_probability) if evaluation.application_quality else 0.0,
+                "contribution_map": json.dumps(contribution_map) if contribution_map else "{}"
             }
             # Profile text for semantic indexing
             profile_summary = f"Skills: {', '.join([s.name for s in resume.skills]) if resume.skills else ''}. "
@@ -137,7 +265,7 @@ async def main():
     if results["blind_evaluation"]:
         print(f"Candidate: [REDACTED]")
         scores = results['blind_evaluation'].scores
-        total = scores.open_source.score + scores.self_projects.score + scores.production.score + scores.technical_skills.score
+        total = results['blind_evaluation'].total_score
         print(f"Blind Total Score: {total:.1f}")
         print(f"Evidence: {scores.open_source.evidence[:100]}...")
     else:
