@@ -34,14 +34,14 @@ MODEL_PARAMETERS = {
     "gemma3:12b": {"temperature": 0.1, "top_p": 0.9},
     "mistral:7b": {"temperature": 0.1, "top_p": 0.9},
     # Google Gemini models
-    "gemini-2.0-flash": {"temperature": 0.1, "top_p": 0.9},
-    "gemini-2.0-flash-lite": {"temperature": 0.1, "top_p": 0.9},
-    "gemini-2.5-pro": {"temperature": 0.1, "top_p": 0.9},
-    "gemini-2.5-flash": {"temperature": 0.1, "top_p": 0.9},
-    "gemini-2.5-flash-lite": {"temperature": 0.1, "top_p": 0.9},
+    "gemini-2.0-flash": {"temperature": 0.0, "top_p": 0.1},
+    "gemini-2.0-flash-lite": {"temperature": 0.0, "top_p": 0.1},
+    "gemini-2.5-pro": {"temperature": 0.0, "top_p": 0.1},
+    "gemini-2.5-flash": {"temperature": 0.0, "top_p": 0.1},
+    "gemini-2.5-flash-lite": {"temperature": 0.0, "top_p": 0.1},
     # Groq models
-    "llama-3.3-70b-versatile": {"temperature": 0.1, "top_p": 0.9},
-    "llama-3.1-8b-instant": {"temperature": 0.1, "top_p": 0.9},
+    "llama-3.3-70b-versatile": {"temperature": 0.0, "top_p": 0.1},
+    "llama-3.1-8b-instant": {"temperature": 0.0, "top_p": 0.1},
 }
 
 # Model provider mapping

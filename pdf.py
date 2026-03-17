@@ -400,9 +400,202 @@ class PDFHandler:
             logger.info(
                 f"⏱️ Total time for separate section extraction: {total_time:.2f} seconds"
             )
-
             return json_resume
 
         except Exception as e:
-            logger.error(f"❌ Error creating JSONResume object: {e}")
+            logger.error(f"❌ Error during section extraction: {e}")
             return None
+
+    def generate_evaluation_report(self, evaluation_data: Any, output_path: str):
+        """Generates a premium, ultra-concise 1-2 page explainable PDF report."""
+        try:
+            import fitz # type: ignore
+            
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            doc = fitz.open()
+            page = doc.new_page()
+            
+            # Constants
+            PAGE_HEIGHT = page.rect.height
+            PAGE_WIDTH = page.rect.width
+            MARGIN = 35.0
+            BOTTOM_MARGIN = 45.0
+            FONT_NORMAL, FONT_BOLD = "helv", "hebo"
+            
+            # Theme Colors
+            C_PRIMARY = (0.05, 0.1, 0.3)
+            C_SEC = (0.3, 0.5, 1.0)
+            C_TEXT = (0.1, 0.1, 0.15)
+            C_MUTED = (0.4, 0.4, 0.45)
+            C_ERR = (0.7, 0.1, 0.1)
+            C_OK = (0.05, 0.5, 0.25)
+            
+            class LayoutState:
+                def __init__(self, p: Any):
+                    self.pos_y = 90.0
+                    self.current_page = p
+
+            state = LayoutState(page)
+
+            def ensure_space(h: float):
+                if state.pos_y + h > PAGE_HEIGHT - BOTTOM_MARGIN:
+                    state.current_page = doc.new_page()
+                    state.pos_y = MARGIN + 10.0
+                    return True
+                return False
+
+            def write_text(text: Any, font=FONT_NORMAL, size=9.0, color=C_TEXT, x=MARGIN, w=None, align=0, indent=0.0):
+                if not text: return 0.0
+                ensure_space(size + 2.0)
+                width = (w if w else (PAGE_WIDTH - x - MARGIN)) - indent
+                rect = fitz.Rect(x + indent, state.pos_y, x + indent + width, PAGE_HEIGHT - BOTTOM_MARGIN)
+                clean_text = str(text)[:1000]
+                h = state.current_page.insert_textbox(rect, clean_text, fontsize=size, fontname=font, color=color, align=align)
+                if h < 0:
+                    ensure_space(PAGE_HEIGHT)
+                    rect = fitz.Rect(x + indent, state.pos_y, x + indent + width, PAGE_HEIGHT - BOTTOM_MARGIN)
+                    h = state.current_page.insert_textbox(rect, clean_text, fontsize=size, fontname=font, color=color, align=align)
+                if h > 0: state.pos_y += h + 2.0
+                return h
+
+            # 1. HEADER
+            state.current_page.draw_rect(fitz.Rect(0, 0, PAGE_WIDTH, 70), fill=C_PRIMARY, stroke_opacity=0)
+            state.current_page.insert_text(fitz.Point(MARGIN, 40), "IKSHA AI", fontsize=20, color=(1,1,1), fontname=FONT_BOLD)
+            state.current_page.insert_text(fitz.Point(MARGIN, 55), "INTELLIGENCE REPORT", fontsize=8, color=(0.8,0.8,0.9))
+            
+            score_raw = evaluation_data.get('total_score', 0)
+            score = int(score_raw) if str(score_raw).isdigit() else 0
+            s_color = C_OK if score >= 70 else (C_SEC if score >= 40 else C_ERR)
+            bx = PAGE_WIDTH - 65
+            state.current_page.draw_circle(fitz.Point(bx, 35), 26, color=(1,1,1), fill=(1,1,1), width=0, overlay=True)
+            state.current_page.insert_text(fitz.Point(bx - (10 if score >= 10 else 5), 45), str(score), fontsize=22, fontname=FONT_BOLD, color=s_color)
+            state.current_page.insert_text(fitz.Point(bx - 12, 57), "SCORE", fontsize=5, fontname=FONT_BOLD, color=C_MUTED)
+
+            # 2. SUMMARY
+            state.pos_y = 85.0
+            write_text("EXECUTIVE SUMMARY", font=FONT_BOLD, size=10.0, color=C_PRIMARY)
+            summary_raw = evaluation_data.get('jd_fit_analysis', 'Analysis complete.')
+            summary = str(summary_raw)
+            write_text(summary[:400] + ("..." if len(summary) > 400 else ""), size=8.2)
+            state.pos_y += 3.0
+
+            # 3. METRICS
+            ensure_space(15.0)
+            state.current_page.draw_line(fitz.Point(MARGIN, state.pos_y + 10), fitz.Point(PAGE_WIDTH - MARGIN, state.pos_y + 10), color=C_PRIMARY, width=0.5)
+            state.current_page.insert_text(fitz.Point(MARGIN, state.pos_y + 8), "ANALYSIS METRICS", fontsize=9, fontname=FONT_BOLD, color=C_PRIMARY)
+            state.pos_y += 18.0
+            
+            scores = evaluation_data.get('scores', {})
+            if scores:
+                items = list(scores.items())
+                cw = (PAGE_WIDTH - 2*MARGIN - 15) / 2
+                for i in range(0, len(items), 2):
+                    ensure_space(45.0)
+                    row_y = state.pos_y
+                    max_row_y = row_y
+                    for j in range(min(2, len(items) - i)):
+                        cat, val = items[i+j]
+                        if not isinstance(val, dict): continue
+                        xp = MARGIN + (j * (cw + 15))
+                        name = str(cat).replace('_', ' ').title()
+                        s = int(val.get('score', 0))
+                        ms = int(val.get('max', 10))
+                        ev = str(val.get('evidence', ''))[:100]
+                        state.current_page.insert_text(fitz.Point(xp, state.pos_y + 8), name, fontsize=7.5, fontname=FONT_BOLD, color=C_PRIMARY)
+                        state.current_page.insert_text(fitz.Point(xp + cw - 20, state.pos_y + 8), f"{s}/{ms}", fontsize=7.5, fontname=FONT_BOLD, color=s_color)
+                        state.current_page.draw_rect(fitz.Rect(xp, state.pos_y + 11, xp + cw, state.pos_y + 12), fill=(0.95,0.95,0.95), stroke_opacity=0)
+                        state.current_page.draw_rect(fitz.Rect(xp, state.pos_y + 11, xp + (cw * (s/ms if ms > 0 else 0)), state.pos_y + 12), fill=s_color, stroke_opacity=0)
+                        rect = fitz.Rect(xp, state.pos_y + 14, xp + cw, state.pos_y + 40)
+                        h = state.current_page.insert_textbox(rect, ev, fontsize=6.2, color=C_MUTED)
+                        item_h = 14 + (h if h > 0 else 8)
+                        state.pos_y += item_h
+                        max_row_y = max(max_row_y, state.pos_y)
+                    state.pos_y = max_row_y + 3.0
+
+            # 4. SIGNALS
+            ensure_space(50.0)
+            state.current_page.draw_line(fitz.Point(MARGIN, state.pos_y + 10), fitz.Point(PAGE_WIDTH - MARGIN, state.pos_y + 10), color=C_PRIMARY, width=0.5)
+            state.current_page.insert_text(fitz.Point(MARGIN, state.pos_y + 8), "INTELLIGENCE SIGNALS", fontsize=9, fontname=FONT_BOLD, color=C_PRIMARY)
+            state.pos_y += 18.0
+            
+            str_list, imp_list = evaluation_data.get('key_strengths', [])[:4], evaluation_data.get('areas_for_improvement', [])[:4]
+            cw = (PAGE_WIDTH - 2*MARGIN - 15) / 2
+            start_y = state.pos_y
+            state.current_page.insert_text(fitz.Point(MARGIN, start_y), "STRENGTHS", fontsize=7.5, fontname=FONT_BOLD, color=C_OK)
+            state.current_page.insert_text(fitz.Point(MARGIN + cw + 15, start_y), "IMPROVEMENTS", fontsize=7.5, fontname=FONT_BOLD, color=C_ERR)
+            state.pos_y = start_y + 9.0
+            for i in range(max(len(str_list), len(imp_list))):
+                ensure_space(35.0)
+                row_y = state.pos_y
+                cur_max = 0.0
+                if i < len(str_list):
+                    rect = fitz.Rect(MARGIN, row_y, MARGIN + cw, row_y + 30)
+                    h = state.current_page.insert_textbox(rect, f"• {str_list[i]}", fontsize=6.8)
+                    cur_max = max(cur_max, h)
+                if i < len(imp_list):
+                    rect = fitz.Rect(MARGIN + cw + 15, row_y, MARGIN + 2*cw + 15, row_y + 30)
+                    h = state.current_page.insert_textbox(rect, f"• {imp_list[i]}", fontsize=6.8)
+                    cur_max = max(cur_max, h)
+                state.pos_y += (cur_max if cur_max > 0 else 8.0) + 2.0
+
+            # 5. IDENTITY TRUST
+            trust = evaluation_data.get('identity_trust', {})
+            if trust:
+                ensure_space(70.0)
+                state.current_page.draw_line(fitz.Point(MARGIN, state.pos_y + 10), fitz.Point(PAGE_WIDTH - MARGIN, state.pos_y + 10), color=C_PRIMARY, width=0.5)
+                state.current_page.insert_text(fitz.Point(MARGIN, state.pos_y + 8), "IDENTITY TRUST & AUTHENTICATION", fontsize=9, fontname=FONT_BOLD, color=C_PRIMARY)
+                state.pos_y += 18.0
+                
+                risk_lvl = str(trust.get('fraud_risk_level', 'LOW')).upper()
+                r_color = C_ERR if risk_lvl in ['HIGH', 'CRITICAL'] else (C_SEC if risk_lvl == 'MEDIUM' else C_OK)
+                i_score = float(trust.get('identity_score', 0))
+                write_text(f"Overall Trust: {i_score:.1f}/10  |  Fraud Risk: {risk_lvl}", size=8, font=FONT_BOLD, color=r_color)
+                
+                cw = (PAGE_WIDTH - 2*MARGIN - 20) / 3
+                
+                modules = [
+                    (f"LinkedIn: {float(trust.get('linkedin',{}).get('linkedin_profile_score',0)):.1f}", MARGIN),
+                    (f"GitHub: {float(trust.get('github',{}).get('github_activity_score',0)):.1f}", MARGIN + cw + 10),
+                    (f"AI Prob: {float(trust.get('ai_resume_probability',0))*100:.0f}%", MARGIN + 2*cw + 20),
+                    (f"Portfolio: {float(trust.get('portfolio',{}).get('portfolio_score',0)):.1f}", MARGIN),
+                    (f"Consistent: {float(trust.get('resume_consistency',{}).get('timeline_consistency_score',0)):.1f}", MARGIN + cw + 10),
+                    (f"Graph: {float(trust.get('social_graph_trust_score',0)):.1f}", MARGIN + 2*cw + 20)
+                ]
+                for i in range(0, len(modules), 3):
+                    ensure_space(15.0)
+                    row_y = state.pos_y
+                    for j in range(min(3, len(modules) - i)):
+                        lbl, xp = modules[i+j]
+                        state.current_page.insert_text(fitz.Point(xp, row_y + 8), lbl, fontsize=7.2, color=C_TEXT)
+                    state.pos_y += 12.0
+                state.pos_y += 2.0
+                
+                flags = trust.get('fraud_flags', [])
+                if flags:
+                    ensure_space(15.0)
+                    write_text("ALERTS:", font=FONT_BOLD, size=6.5, color=C_ERR)
+                    for f in flags[:2]: write_text(f"! {f}", size=6.2, color=C_ERR, indent=3.0)
+
+            # 6. MISMATCHES
+            mismatches = evaluation_data.get('mismatch_reasons', [])
+            if mismatches:
+                state.pos_y += 5.0
+                write_text("CRITICAL MISMATCHES", font=FONT_BOLD, size=9.0, color=C_ERR)
+                for m in mismatches[:3]:
+                    write_text(f"! {m}", size=7.5, indent=5.0)
+
+            # Footer
+            total_pages = len(doc)
+            for i in range(total_pages):
+                p = doc[i]
+                p.draw_line(fitz.Point(35, PAGE_HEIGHT - 25), fitz.Point(PAGE_WIDTH - 35, PAGE_HEIGHT - 25), color=(0.9,0.9,0.9), width=0.5)
+                p.insert_text(fitz.Point(35, PAGE_HEIGHT - 18), f"IKSHA AI | CONFIDENTIAL | {time.strftime('%Y-%m-%d')}", fontsize=5.5, color=C_MUTED)
+                p.insert_text(fitz.Point(PAGE_WIDTH - 70, PAGE_HEIGHT - 18), f"Page {i+1} of {total_pages}", fontsize=5.5, color=C_MUTED)
+
+            doc.save(output_path)
+            doc.close()
+            logger.info(f"✅ Premium report generated at: {output_path}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to generate PDF report: {e}")
+            raise
