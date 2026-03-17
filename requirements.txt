@@ -7,3 +7,27 @@ Jinja2==3.1.6
 google-generativeai==0.4.0
 python-dotenv==1.0.1
 black==25.9.0
+
+# --- Enterprise Infrastructure ---
+# Task Queue
+celery>=5.6.0
+redis>=7.0.0
+
+# Object Storage (MinIO via S3 API)
+boto3>=1.42.0
+
+# PostgreSQL
+sqlalchemy>=2.0.0
+asyncpg>=0.31.0
+greenlet>=3.1.1
+
+# Vector Database
+qdrant-client>=1.17.0
+
+# Security & Observability
+python-json-logger>=4.0.0
+
+# FastAPI extras
+fastapi>=0.115.0
+uvicorn>=0.34.0
+sse-starlette>=2.0.0

@@ -1,5 +1,6 @@
 # Project Specific Files
-
+reports/
+db/ats_vector_store/
 **/*.pyc
 resume/*.pdf
 run/*.pdf

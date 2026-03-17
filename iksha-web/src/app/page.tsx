@@ -14,7 +14,8 @@ import {
   Activity, 
   LayoutDashboard, 
   SearchCode,
-  LogOut
+  LogOut,
+  FileText
 } from 'lucide-react';
 
 type ViewState = 'landing' | 'analyzing' | 'main';
@@ -113,6 +114,18 @@ export default function App() {
           <div className="hidden lg:flex items-center gap-2 text-[10px] font-black uppercase tracking-tighter text-slate-500 border-r border-white/10 pr-4">
              <Activity className="w-3 h-3 text-emerald-400" /> System Integrity: Optimal
           </div>
+          {view === 'main' && resultData?.report_url && (
+            <motion.a
+              href={`http://localhost:8080${resultData.report_url}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-full text-xs font-black uppercase tracking-widest hover:bg-emerald-500/20 transition-all"
+            >
+              <FileText className="w-4 h-4" /> Download Report
+            </motion.a>
+          )}
           {view === 'main' ? (
             <button 
               onClick={() => {
@@ -205,7 +218,9 @@ export default function App() {
                     {logs.map((log, i) => (
                       <div key={i} className="flex gap-4">
                         <span className="text-slate-600">{i+1}.</span>
-                        <span className={log?.includes('Complete') ? 'text-emerald-400' : 'text-slate-300'}>{log}</span>
+                        <span className={(log && typeof log === 'string' && log.includes('ERROR')) ? 'text-rose-400' : (log && typeof log === 'string' && log.includes('Complete')) ? 'text-emerald-400' : 'text-slate-300'}>
+                          {log}
+                        </span>
                       </div>
                     ))}
                     <div className="w-1.5 h-3 bg-indigo-500 animate-pulse inline-block" />
