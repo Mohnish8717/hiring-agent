@@ -33,8 +33,17 @@ class ATSOrchestrator:
         self.quality_agent = ApplicationQualityAgent()
         self.experience_agent = CandidateExperienceAgent()
 
-    async def run_pipeline(self, pdf_path: str, job_description: Optional[str] = None) -> Dict[str, Any]:
+    async def run_pipeline(self, pdf_path: str, job_description: Optional[str] = None, on_log = None) -> Dict[str, Any]:
         """Runs the complete multi-agent pipeline for a single resume."""
+        
+        async def stream_log(msg: str):
+            self.logger.info(msg)
+            if on_log:
+                if asyncio.iscoroutinefunction(on_log):
+                    await on_log(msg)
+                else:
+                    on_log(msg)
+
         results: Dict[str, Any] = {
             "pdf_path": pdf_path,
             "job_description": job_description,
@@ -50,15 +59,15 @@ class ATSOrchestrator:
         }
 
         # 1. Extraction Phase
-        self.logger.info("--- Phase 1: Extraction ---")
+        await stream_log("--- Phase 1: Extraction ---")
         resume_data = await self.extraction_agent.process(pdf_path)
         if not resume_data:
-            self.logger.error("Pipeline failed at extraction phase")
+            await stream_log("Extraction failed.")
             return results
         results["resume_data"] = resume_data
 
         # 1.5. Application Quality Detection
-        self.logger.info("--- Phase 1.5: Application Quality ---")
+        await stream_log("--- Phase 1.5: Application Quality ---")
         # Optimization: Pass only relevant sections for quality detection
         quality_input = resume_data.model_dump(include={
             "basics": {"summary"},
@@ -69,17 +78,18 @@ class ATSOrchestrator:
         results["application_quality"] = app_quality
 
         # 2. Verification Phase (GitHub)
-        self.logger.info("--- Phase 2: Verification ---")
+        await stream_log("--- Phase 2: Verification ---")
         github_url = self._get_github_url(resume_data)
         github_data = None
         if github_url:
+            await stream_log(f"GitHub URL found: {github_url}")
             github_data = await self.verification_agent.process(github_url)
             results["github_data"] = github_data
         else:
-            self.logger.info("No GitHub URL found, skipping verification")
+            await stream_log("No GitHub URL found, skipping verification")
 
         # 2.1. Identity Trust Agent
-        self.logger.info("--- Phase 2.1: Identity Trust ---")
+        await stream_log("--- Phase 2.1: Identity Trust ---")
         identity_trust = await self.identity_trust_agent.process({
             "resume_data": resume_data,
             "github_data": github_data,
@@ -88,7 +98,7 @@ class ATSOrchestrator:
         results["identity_trust"] = identity_trust
 
         # --- Phase 2.2: Skill Assessment ---
-        self.logger.info("--- Phase 2.2: Skill Assessment ---")
+        await stream_log("--- Phase 2.2: Skill Assessment ---")
         # Optimization: Filter for skills, work, and projects
         assessment_resume = JSONResume(**resume_data.model_dump(include={
             "basics": {"name"},
@@ -104,7 +114,7 @@ class ATSOrchestrator:
 
 
         # 3. Bias Audit & Evaluation Phase
-        self.logger.info("--- Phase 3: Bias Audit & Evaluation ---")
+        await stream_log("--- Phase 3: Bias Audit & Evaluation ---")
         evaluation_input = {
             "resume_data": resume_data,
             "github_data": github_data,
@@ -121,7 +131,7 @@ class ATSOrchestrator:
             blind_evaluation.application_quality = app_quality
             
             # 3.5. Hiring Analytics
-            self.logger.info("--- Phase 3.5: Hiring Analytics ---")
+            await stream_log("--- Phase 3.5: Hiring Analytics ---")
             # Optimization: Filter for work, projects, and education
             analytics_resume = JSONResume(**resume_data.model_dump(include={
                 "work": True,
@@ -136,7 +146,7 @@ class ATSOrchestrator:
             results["hiring_analytics"] = hiring_analytics
 
             # 3.6. Candidate Experience
-            self.logger.info("--- Phase 3.6: Candidate Experience ---")
+            await stream_log("--- Phase 3.6: Candidate Experience ---")
             # Optimization: Filter for basics, work, and skills
             experience_resume = JSONResume(**resume_data.model_dump(include={
                 "basics": {"name"},
@@ -197,12 +207,24 @@ class ATSOrchestrator:
 
 
         # 4. Memory Persistence (Vector Store)
-        self.logger.info("--- Phase 4: Intelligence Storage ---")
+        await stream_log("--- Phase 4: Intelligence Storage ---")
         if blind_evaluation:
             self._persist_candidate(pdf_path, resume_data, blind_evaluation, results.get("contribution_map"))
 
-        self.logger.info("Pipeline run complete")
-        return results
+        await stream_log("Pipeline run complete")
+        
+        # Ensure everything is a serializable dict for SSE/API
+        def serialize(obj):
+            if hasattr(obj, "dict"): return obj.dict()
+            if hasattr(obj, "model_dump"): return obj.model_dump()
+            return obj
+
+        serializable_results = {k: serialize(v) for k, v in results.items()}
+        # Explicitly add total_score as it's a property and won't be in model_dump
+        if blind_evaluation:
+            serializable_results["blind_evaluation"]["total_score"] = blind_evaluation.total_score
+            
+        return serializable_results
 
     def _get_github_url(self, resume_data: JSONResume) -> Optional[str]:
         if not resume_data or not resume_data.basics or not resume_data.basics.profiles:
